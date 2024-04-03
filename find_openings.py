@@ -8,6 +8,21 @@ BASE_MODEL = "google/gemma-7b-it"
 
 stub = Stub(name='job_scraper')
 
+def download_model_to_folder():
+    from huggingface_hub import snapshot_download
+    from transformers.utils import move_cache
+
+    os.makedirs(MODEL_DIR, exist_ok=True)
+
+    snapshot_download(
+        BASE_MODEL,
+        local_dir=MODEL_DIR,
+        token=os.environ["HF_TOKEN"],
+        ignore_patterns=["*.pt", "*.gguf"],
+    )
+    move_cache()
+
+
 image = (
     Image.from_registry(
         "nvidia/cuda:12.1.1-devel-ubuntu22.04", add_python="3.10"
@@ -28,7 +43,7 @@ image = (
     .env({"HF_HUB_ENABLE_HF_TRANSFER": "1"})
     .run_function(
         download_model_to_folder,
-        secrets=[Secret.from_name("huggingface-secret")],
+        secrets=[Secret.from_name("my-huggingface-secret")],
         timeout=60 * 20,
     )
 )
@@ -111,6 +126,7 @@ class Model:
 
 
 
+
 # image = Image.debian_slim(python_version='3.10').run_commands(
 #     "apt-get update",
 #     "apt-get install -y software-properties-common",
@@ -120,26 +136,6 @@ class Model:
 #     "playwright install-deps chromium",
 #     "playwright install chromium",
 # )
-
-
-@stub.function(
-    image=image,
-    secrets=[Secret.from_name("my-huggingface-secret")],
-    gpu="any",
-)
-def download_model_to_folder():
-    from huggingface_hub import snapshot_download
-    from transformers.utils import move_cache
-
-    os.makedirs(MODEL_DIR, exist_ok=True)
-
-    snapshot_download(
-        BASE_MODEL,
-        local_dir=MODEL_DIR,
-        token=os.environ["HF_TOKEN"],
-        ignore_patterns=["*.pt", "*.gguf"],
-    )
-    move_cache()
 
 
 
@@ -166,9 +162,37 @@ async def get_links(cur_url: str):
 @stub.local_entrypoint()
 def main():
     try:
-        urls = ['https://www.adobe.com/careers.html','https://jobs.netflix.com/search']
-        for links in get_links.map(urls):
-            for link in links:
-                print(link)
+        model = Model()
+        questions = [
+            # Coding questions
+            "Implement a Python function to compute the Fibonacci numbers.",
+            "Write a Rust function that performs binary exponentiation.",
+            "How do I allocate memory in C?",
+            "What are the differences between Javascript and Python?",
+            "How do I find invalid indices in Postgres?",
+            "How can you implement a LRU (Least Recently Used) cache in Python?",
+            "What approach would you use to detect and prevent race conditions in a multithreaded application?",
+            "Can you explain how a decision tree algorithm works in machine learning?",
+            "How would you design a simple key-value store database from scratch?",
+            "How do you handle deadlock situations in concurrent programming?",
+            "What is the logic behind the A* search algorithm, and where is it used?",
+            "How can you design an efficient autocomplete system?",
+            "What approach would you take to design a secure session management system in a web application?",
+            "How would you handle collision in a hash table?",
+            "How can you implement a load balancer for a distributed system?",
+            "战国时期最重要的人物是谁?",
+            "Tuende hatua kwa hatua. Hesabu jumla ya mfululizo wa kihesabu wenye neno la kwanza 2, neno la mwisho 42, na jumla ya maneno 21.",
+            "Kannst du die wichtigsten Eigenschaften und Funktionen des NMDA-Rezeptors beschreiben?",
+        ]
+        model.generate.remote(questions)
     except Exception as e:
-        print('ecveption handled', e)
+        print('exception:',e)
+# @stub.local_entrypoint()
+# def main():
+#     try:
+#         urls = ['https://www.adobe.com/careers.html','https://jobs.netflix.com/search']
+#         for links in get_links.map(urls):
+#             for link in links:
+#                 print(link)
+#     except Exception as e:
+#         print('ecveption handled', e)
