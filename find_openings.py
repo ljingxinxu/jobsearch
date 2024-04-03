@@ -52,7 +52,6 @@ stub = Stub(f"example-vllm-{BASE_MODEL}", image=image)
 
 GPU_CONFIG = gpu.H100(count=1)
 
-
 @stub.cls(gpu=GPU_CONFIG, secrets=[Secret.from_name("my-huggingface-secret")])
 class Model:
     @enter()
@@ -78,12 +77,12 @@ class Model:
         )
 
     @method()
-    def generate(self, user_questions):
+    def generate(self, user_question):
         import time
 
         from vllm import SamplingParams
 
-        prompts = [self.template.format(user=q) for q in user_questions]
+        prompt = self.template.format(user=user_question)
 
         sampling_params = SamplingParams(
             temperature=0.75,
@@ -92,7 +91,7 @@ class Model:
             presence_penalty=1.15,
         )
         start = time.monotonic_ns()
-        result = self.llm.generate(prompts, sampling_params)
+        result = self.llm.generate(prompt, sampling_params)
         duration_s = (time.monotonic_ns() - start) / 1e9
         num_tokens = 0
 
@@ -125,26 +124,11 @@ class Model:
             ray.shutdown()
 
 
-
-
-# image = Image.debian_slim(python_version='3.10').run_commands(
-#     "apt-get update",
-#     "apt-get install -y software-properties-common",
-#     "apt-add-repository non-free",
-#     "apt-add-repository contrib",
-#     "pip install playwright==1.30.0",
-#     "playwright install-deps chromium",
-#     "playwright install chromium",
-# )
-
-
-
 @stub.function(image=image)
-async def get_links(cur_url: str):
+async def get_links(cur_url):
     from playwright.async_api import async_playwright
-
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = await p.chromium.launch()
         ua = (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -152,41 +136,43 @@ async def get_links(cur_url: str):
         )
         page = await browser.new_page(user_agent=ua)
         await page.goto(cur_url)
-        links = await page.eval_on_selector_all("a[href]", "elements => elements.map(element => element.href)")
-        await browser.close()
 
-    print("Links", links)
-    return links
+        all_links = []
+
+        while True:
+            current_page_links = await page.eval_on_selector_all("a[href]", "elements => elements.map(element => element.href)")
+            all_links.extend(current_page_links)
+            
+            next_page_button = await page.query_selector('[aria-label="Next Page"]')
+
+            if next_page_button:
+                print('found button')
+                await next_page_button.click()
+                await page.wait_for_load_state('networkidle')
+            else:
+                break
+            
+        print('got all links', all_links)        
+        
+        await browser.close()
+    return all_links
 
 
 @stub.local_entrypoint()
 def main():
     try:
         model = Model()
-        questions = [
-            # Coding questions
-            "Implement a Python function to compute the Fibonacci numbers.",
-            "Write a Rust function that performs binary exponentiation.",
-            "How do I allocate memory in C?",
-            "What are the differences between Javascript and Python?",
-            "How do I find invalid indices in Postgres?",
-            "How can you implement a LRU (Least Recently Used) cache in Python?",
-            "What approach would you use to detect and prevent race conditions in a multithreaded application?",
-            "Can you explain how a decision tree algorithm works in machine learning?",
-            "How would you design a simple key-value store database from scratch?",
-            "How do you handle deadlock situations in concurrent programming?",
-            "What is the logic behind the A* search algorithm, and where is it used?",
-            "How can you design an efficient autocomplete system?",
-            "What approach would you take to design a secure session management system in a web application?",
-            "How would you handle collision in a hash table?",
-            "How can you implement a load balancer for a distributed system?",
-            "战国时期最重要的人物是谁?",
-            "Tuende hatua kwa hatua. Hesabu jumla ya mfululizo wa kihesabu wenye neno la kwanza 2, neno la mwisho 42, na jumla ya maneno 21.",
-            "Kannst du die wichtigsten Eigenschaften und Funktionen des NMDA-Rezeptors beschreiben?",
-        ]
-        model.generate.remote(questions)
+        url = 'https://jobs.netflix.com/search'
+        job_links = get_links.remote(url)
+        print('all links', job_links)
+        links_str = ' '.join(str(x) for x in job_links)
+        question = "I'm interested in engineering or product roles that are suitable for new grad, entry level, or around 2 years of professional experience. Which links should I click out of this list? Return a list of links only" + links_str
+        model.generate.remote(question)
+        print('model selected links', )
     except Exception as e:
         print('exception:',e)
+
+
 # @stub.local_entrypoint()
 # def main():
 #     try:
@@ -195,4 +181,4 @@ def main():
 #             for link in links:
 #                 print(link)
 #     except Exception as e:
-#         print('ecveption handled', e)
+#         print('ecveption handled', e)https://jobs.netflix.com/search
