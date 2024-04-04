@@ -1,6 +1,6 @@
 import os
 
-from modal import Image, Secret, Stub, enter, exit, gpu, method
+from modal import Image, Secret, Stub, enter, exit, gpu, method, web_endpoint
 
 MODEL_DIR = "/model"
 BASE_MODEL = "google/gemma-7b-it"
@@ -125,60 +125,63 @@ class Model:
 
 
 @stub.function(image=image)
-async def get_links(cur_url):
-    from playwright.async_api import async_playwright
-    async with async_playwright() as p:
-        browser = await p.chromium.launch()
+#@web_endpoint()
+def get_links(cur_url):
+    from playwright.sync_api import sync_playwright
+    #url = 'https://jobs.netflix.com/search'
+    with sync_playwright() as p:
+        browser =  p.chromium.launch()
         ua = (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/69.0.3497.100 Safari/537.36"
         )
-        page = await browser.new_page(user_agent=ua)
-        await page.goto(cur_url)
+        page =  browser.new_page(user_agent=ua)
+        page.goto(cur_url)
 
         all_links = []
-
+        disabled = False
+        page_index = 1
         while True:
-            current_page_links = await page.eval_on_selector_all("a[href]", "elements => elements.map(element => element.href)")
-            all_links.extend(current_page_links)
-            
-            next_page_button = await page.query_selector('[aria-label="Next Page"]')
+            # find urls with /jobs/ substring href
+            substring='/jobs/'
+            selector = f'a[href*="{substring}"]'
+            page.wait_for_selector(selector, timeout=5000)  # Waits for 5 seconds
 
-            if next_page_button:
-                print('found button')
-                await next_page_button.click()
-                await page.wait_for_load_state('networkidle')
-            else:
-                break
+            links = page.locator(selector)
+            print(links.count())
+            links_text = [link.text_content() for link in links.element_handles()]
+
+            #links =  page.get_by_role("link").filter(page.get_by_role("button", name="column 2 button"))
+            #print(links_text[0])
+
+            all_links.extend(links_text)
+        
             
+            next_page_button = page.get_by_label('Next Page')
+            disabled = next_page_button.is_disabled()
+            page_index += 1
+
+            if not disabled:
+                page.goto(cur_url+'?page='+str(page_index))
+                print('new page url',page.url)
+            else: 
+                break
         print('got all links', all_links)        
         
-        await browser.close()
+        browser.close()
     return all_links
-
-
-@stub.local_entrypoint()
-def main():
-    try:
-        model = Model()
-        url = 'https://jobs.netflix.com/search'
-        job_links = get_links.remote(url)
-        print('all links', job_links)
-        links_str = ' '.join(str(x) for x in job_links)
-        question = "I'm interested in engineering or product roles that are suitable for new grad, entry level, or around 2 years of professional experience. Which links should I click out of this list? Return a list of links only" + links_str
-        model.generate.remote(question)
-        print('model selected links', )
-    except Exception as e:
-        print('exception:',e)
 
 
 # @stub.local_entrypoint()
 # def main():
 #     try:
-#         urls = ['https://www.adobe.com/careers.html','https://jobs.netflix.com/search']
-#         for links in get_links.map(urls):
-#             for link in links:
-#                 print(link)
+#         model = Model()
+#         url = 'https://jobs.netflix.com/search'
+#         job_links = get_links(url)
+#         links_str = ' '.join(str(x) for x in job_links)
+#         question = "I'm interested in engineering or product roles that are suitable for new grad, entry level, or around 2 years of professional experience. Which links should I click out of this list? Return a list of links only" + links_str
+#         model.generate.remote(question)
+#         print('model selected links', )
 #     except Exception as e:
-#         print('ecveption handled', e)https://jobs.netflix.com/search
+#         print('exception:',e)
