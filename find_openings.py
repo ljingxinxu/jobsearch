@@ -1,12 +1,13 @@
 import os
 
-from modal import Image, Secret, Stub, enter, exit, gpu, method, web_endpoint
+from modal import Image, Secret, Stub, asgi_app, enter, exit, gpu, method, web_endpoint
+
+from fastapi import FastAPI
+
+web_app = FastAPI()
 
 MODEL_DIR = "/model"
 BASE_MODEL = "google/gemma-7b-it"
-
-
-stub = Stub(name='job_scraper')
 
 def download_model_to_folder():
     from huggingface_hub import snapshot_download
@@ -32,7 +33,9 @@ image = (
         "huggingface_hub==0.19.4",
         "hf-transfer==0.1.4",
         "torch==2.1.2",
-        "playwright==1.30.0"
+        "playwright==1.30.0",
+        "gradio~=3.50.2"
+
     ).run_commands(
         "playwright install-deps chromium",
         "playwright install chromium"
@@ -102,7 +105,8 @@ class Model:
             "RED": "\033[91m",
             "ENDC": "\033[0m",
         }
-
+        res = ''
+        print(len(result))
         for output in result:
             num_tokens += len(output.outputs[0].token_ids)
             print(
@@ -111,10 +115,14 @@ class Model:
                 "\n\n",
                 sep=COLOR["ENDC"],
             )
-            time.sleep(0.01)
-        print(
-            f"{COLOR['HEADER']}{COLOR['GREEN']}Generated {num_tokens} tokens from {BASE_MODEL} in {duration_s:.1f} seconds, throughput = {num_tokens / duration_s:.0f} tokens/second on {GPU_CONFIG}.{COLOR['ENDC']}"
-        )
+            print(type(output), output.outputs[0].text)
+        
+            #res.append(output.outputs[0].text)
+        return output.outputs[0].text
+        #time.sleep(0.01)
+        # print(
+        #     f"{COLOR['HEADER']}{COLOR['GREEN']}Generated {num_tokens} tokens from {BASE_MODEL} in {duration_s:.1f} seconds, throughput = {num_tokens / duration_s:.0f} tokens/second on {GPU_CONFIG}.{COLOR['ENDC']}"
+        # )
 
     @exit()
     def stop_engine(self):
@@ -124,7 +132,37 @@ class Model:
             ray.shutdown()
 
 
-@stub.function(image=image)
+@stub.function(keep_warm=1, container_idle_timeout=60 * 20)
+@asgi_app()
+#@web_endpoint()
+def launch_gradio():
+    import gradio as gr
+    from gradio.routes import mount_gradio_app
+    model = Model()
+    links_str='manager, software developer, engineer'        
+    question = "Here are all the job openings at a company I want to join. Pick out all the 50 exact job titles that match my criteria most closely. criteria #1 no L3, L4, L5 or principal, or senior roles. #2 no roles based outside the U.S. #3 roles that leverage my engineering and product skills"
+    input = question + links_str
+
+
+    iface = gr.Interface(
+        model.generate.remote,
+        inputs=[gr.Textbox(value=input, label="🎨 Prompt")],
+        outputs="text",
+        # some extra bits to make it look nicer
+        title="LoRAs Galore",
+        description="# Try out some of the top custom SDXL models!"
+        "\n\nPick a LoRA finetune of SDXL from the dropdown, then prompt it to generate an image."
+        "\n\nCheck out [the code on GitHub](https://github.com/modal-labs/modal-examples/blob/main/10_integrations/cloud_bucket_mount_loras.py)"
+        " if you want to create your own version or just see how it works."
+        "\n\nPowered by [Modal](https://modal.com) 🚀",
+        theme="soft",
+        allow_flagging="never",
+    )
+    print('here??')
+    return mount_gradio_app(app=web_app, blocks=iface, path="/")
+    return
+
+@stub.function()
 #@web_endpoint()
 def get_links(cur_url):
     from playwright.sync_api import sync_playwright
@@ -152,9 +190,6 @@ def get_links(cur_url):
             print(links.count())
             links_text = [link.text_content() for link in links.element_handles()]
 
-            #links =  page.get_by_role("link").filter(page.get_by_role("button", name="column 2 button"))
-            #print(links_text[0])
-
             all_links.extend(links_text)
         
             
@@ -173,15 +208,24 @@ def get_links(cur_url):
     return all_links
 
 
-# @stub.local_entrypoint()
-# def main():
-#     try:
-#         model = Model()
-#         url = 'https://jobs.netflix.com/search'
-#         job_links = get_links(url)
-#         links_str = ' '.join(str(x) for x in job_links)
-#         question = "I'm interested in engineering or product roles that are suitable for new grad, entry level, or around 2 years of professional experience. Which links should I click out of this list? Return a list of links only" + links_str
-#         model.generate.remote(question)
-#         print('model selected links', )
-#     except Exception as e:
-#         print('exception:',e)
+@stub.local_entrypoint()
+#@stub.function()
+#@web_endpoint()
+def main():
+    try:
+        model = Model()
+        url = 'https://jobs.netflix.com/search'
+        #job_titles = get_links.remote(url)
+        #links_str = ', '.join(job_titles)
+        links_str=''
+        with open('./output.txt','r') as f:
+            for line in f:
+                links_str+=line
+        question = "Here are all the job openings at a company I want to join. Pick out all the 50 exact job titles that match my criteria most closely. criteria #1 no L3, L4, L5 or principal, or senior roles. #2 no roles based outside the U.S. #3 roles that leverage my engineering and product skills"
+        
+        result= launch_gradio.remote(model, question, links_str)
+        print(result)
+        return result
+        #return model.generate.remote(question + links_str)
+    except Exception as e:
+        print('exception:',e)
